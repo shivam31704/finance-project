@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Zonic Dashboard</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/css/dashboard.css" />
+    <link
+      rel="stylesheet"
+      href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css"
+    />
+  </head>
+  <body class="dashboard-body">
+    <button
+      class="sidebar-open-button"
+      id="sidebarOpen"
+      aria-label="Open sidebar"
+    >
+      <i class="fa-solid fa-bars"></i>
+    </button>
+    <div class="dashboard-app">
+      <aside class="dashboard-sidebar" id="dashboardSidebar">
+        <div class="sidebar-top">
+          <div class="sidebar-brand">
+            <div class="sidebar-logo">Z</div>
+            <div>
+              <span>Zonic</span>
+              <small>Market Lab</small>
+            </div>
+          </div>
+          <button
+            class="sidebar-close"
+            id="sidebarClose"
+            aria-label="Close sidebar"
+          >
+            <i class="fa-solid fa-xmark"></i>
+          </button>
+        </div>
+
+        <nav class="dashboard-nav">
+          <button class="nav-link active" data-section="overview">
+            <i class="fa-solid fa-chart-line"></i>
+            <span>Dashboard</span>
+          </button>
+          <button class="nav-link" data-section="stocks">
+            <i class="fa-solid fa-chart-simple"></i>
+            <span>Stocks</span>
+          </button>
+          <button class="nav-link" data-section="favorites">
+            <i class="fa-solid fa-star"></i>
+            <span>Favourite Stocks</span>
+          </button>
+          <button class="nav-link" data-section="news">
+            <i class="fa-solid fa-newspaper"></i>
+            <span>News</span>
+          </button>
+          <button class="nav-link" data-section="settings">
+            <i class="fa-solid fa-gear"></i>
+            <span>Settings</span>
+          </button>
+          <div class="sidebar-footer">
+            <button class="nav-link logout-link" data-section="logout">
+              <i class="fa-solid fa-right-from-bracket"></i>
+              <span>Logout</span>
+            </button>
+          </div>
+        </nav>
+      </aside>
+
+      <main class="dashboard-main">
+        <header class="dashboard-header">
+          <div>
+            <p class="eyebrow">Welcome back</p>
+            <h1>Good afternoon, <%= name || username %></h1>
+            <p class="dashboard-intro">
+              Open the sidebar to switch views and keep an eye on market
+              momentum.
+            </p>
+          </div>
+          <div class="header-meta">
+            <div class="status-pill">
+              <span class="status-dot"></span> Live market
+            </div>
+            <div class="user-badge">
+              <i class="fa-solid fa-user"></i>
+              <span><%= name || username %></span>
+            </div>
+          </div>
+        </header>
+
+        <section class="dashboard-section active" id="overviewSection">
+          <div class="overview-grid">
+            <article class="stat-card card-glow">
+              <div class="stat-header">
+                <span>Portfolio value</span>
+                <i class="fa-solid fa-wallet"></i>
+              </div>
+              <h2>$78,420</h2>
+              <p>+3.8% today</p>
+            </article>
+            <article class="stat-card card-glow">
+              <div class="stat-header">
+                <span>Market pulse</span>
+                <i class="fa-solid fa-wave-square"></i>
+              </div>
+              <h2>+215.4</h2>
+              <p>Strong buying activity</p>
+            </article>
+            <article class="stat-card card-glow">
+              <div class="stat-header">
+                <span>Watchlist wins</span>
+                <i class="fa-solid fa-star"></i>
+              </div>
+              <h2>12 / 15</h2>
+              <p>Favored gains this week</p>
+            </article>
+          </div>
+
+          <div class="dashboard-panel card-glow">
+            <div class="panel-header">
+              <div>
+                <p class="eyebrow">Stock market overview</p>
+                <h2>Modern animated dashboard for stock market</h2>
+              </div>
+              <span class="badge positive">Live</span>
+            </div>
+            <div class="market-wave">
+              <div class="wave-chart"></div>
+            </div>
+            <div class="market-highlights">
+              <div>
+                <span>Top gainer</span>
+                <strong>NVDA +5.8%</strong>
+              </div>
+              <div>
+                <span>Top mover</span>
+                <strong>TSLA +4.4%</strong>
+              </div>
+              <div>
+                <span>Sentiment</span>
+                <strong>Bullish</strong>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="dashboard-section" id="stocksSection">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Equities</p>
+              <h2>Stocks</h2>
+            </div>
+            <p>
+              Tap the star to favourite a stock and view it later in your
+              favourites screen.
+            </p>
+          </div>
+          <div class="stocks-grid" id="stocksGrid"></div>
+        </section>
+
+        <section class="dashboard-section" id="favoritesSection">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Favourite Stocks</p>
+              <h2>Your watchlist</h2>
+            </div>
+          </div>
+          <div id="favoritesGrid" class="stocks-grid"></div>
+          <p class="empty-state" id="favoritesEmpty">
+            No favourite stocks yet. Mark a stock as favourite from the Stocks
+            view.
+          </p>
+        </section>
+
+        <section class="dashboard-section" id="newsSection">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Market news</p>
+              <h2>News & updates</h2>
+            </div>
+          </div>
+          <div class="news-ticker">
+            <div class="ticker-track" id="newsTicker"></div>
+          </div>
+          <div class="news-grid" id="newsGrid"></div>
+        </section>
+
+        <section class="dashboard-section" id="settingsSection">
+          <div class="section-header">
+            <div>
+              <p class="eyebrow">Settings</p>
+              <h2>App preferences</h2>
+            </div>
+          </div>
+          <div class="settings-grid">
+            <article class="setting-card card-glow">
+              <h3>Notifications</h3>
+              <p>Control trade alerts and news updates.</p>
+              <label class="switch"
+                ><input type="checkbox" id="toggleNotifications" /><span
+                  class="slider"
+                ></span
+              ></label>
+            </article>
+            <article class="setting-card card-glow">
+              <h3>Auto refresh</h3>
+              <p>Update live quotes every few seconds.</p>
+              <label class="switch"
+                ><input type="checkbox" id="toggleAutoRefresh" /><span
+                  class="slider"
+                ></span
+              ></label>
+            </article>
+            <article class="setting-card card-glow">
+              <h3>Dark mode</h3>
+              <p>Use the darker theme for late-night trading.</p>
+              <label class="switch"
+                ><input type="checkbox" id="toggleDarkMode" /><span
+                  class="slider"
+                ></span
+              ></label>
+            </article>
+            <article class="setting-card card-glow">
+              <h3>Trade reminder</h3>
+              <p>Receive daily market summary at 9:00 AM.</p>
+              <label class="switch"
+                ><input type="checkbox" id="toggleReminders" /><span
+                  class="slider"
+                ></span
+              ></label>
+            </article>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script>
+      window.currentUser = <%- JSON.stringify(name || username) %>;
+    </script>
+    <script src="/js/dashboard.js"></script>
+  </body>
+</html>

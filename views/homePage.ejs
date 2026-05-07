@@ -1,0 +1,200 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Zonic</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <link
+      href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/css/bootstrap.min.css"
+      rel="stylesheet"
+      integrity="sha384-sRIl4kxILFvY47J16cr9ZwB07vP4J8+LH7qKQnuqkuIAvNWLzeN8tE5YBujZqJLB"
+      crossorigin="anonymous"
+    />
+    <link rel="stylesheet" href="/css/style.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <div class="container header-inner">
+        <a class="brand" href="/">
+          <span class="brand-logo" aria-hidden="true"></span>
+          Zonic
+        </a>
+
+        <nav class="nav-links">
+          <a href="#">Market</a>
+          <a href="#">Platform</a>
+          <a href="#">Learning</a>
+          <a href="#">Contact</a>
+        </nav>
+
+        <button class="btn btn-primary header-cta" onclick="openLoginModal()">
+          Login
+        </button>
+      </div>
+    </header>
+
+    <main class="hero">
+      <div class="hero-overlay"></div>
+      <div class="container hero-content">
+        <span class="eyebrow">Trading built for modern investors</span>
+        <h1>Clear market signals with fast account access.</h1>
+        <p>
+          Secure login and signup for intelligent stock market monitoring,
+          candle charts, and portfolio growth.
+        </p>
+
+        <div class="hero-actions">
+          <button class="btn btn-primary" onclick="openSignupModal()">
+            Open Account
+          </button>
+          <button class="btn btn-secondary">Learn More</button>
+        </div>
+
+        <div class="hero-metrics">
+          <div>
+            <strong>24/7</strong>
+            <span>Market coverage</span>
+          </div>
+          <div>
+            <strong>95%</strong>
+            <span>Fast approval</span>
+          </div>
+          <div>
+            <strong>1M+</strong>
+            <span>Active traders</span>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <footer class="site-footer">
+      <div class="container footer-inner">
+        <div>
+          <p class="footer-title">Zonic Capital</p>
+          <p class="footer-copy">
+            A modern investing platform designed for clarity, speed, and
+            confidence in global markets.
+          </p>
+        </div>
+        <div class="footer-links">
+          <a href="#">About</a>
+          <a href="#">Support</a>
+          <a href="#">Privacy</a>
+        </div>
+      </div>
+    </footer>
+
+    <!-- Modal Structure -->
+
+    <div class="modal-wrapper" id="modalWrapper">
+      <div class="modal-card">
+        <div class="auth-switch-row">
+          <button
+            type="button"
+            class="auth-switch active"
+            id="loginSwitch"
+            onclick="toggleAuthMode('login')"
+          >
+            Login
+          </button>
+          <button
+            type="button"
+            class="auth-switch"
+            id="signupSwitch"
+            onclick="toggleAuthMode('signup')"
+          >
+            Open Account
+          </button>
+        </div>
+
+        <div id="loginView">
+          <h2><b>Login to Zonic</b></h2>
+          <p>Enter your username and password to continue.</p>
+          <div id="loginError" class="auth-error"></div>
+          <form id="loginForm">
+            <div class="input-group">
+              <label for="loginUsername"></label>
+              <input
+                id="loginUsername"
+                name="username"
+                type="text"
+                placeholder="Username"
+                required
+              />
+            </div>
+
+            <div class="input-group">
+              <label for="loginPassword"></label>
+              <input
+                id="loginPassword"
+                name="password"
+                type="password"
+                placeholder="Password"
+                required
+              />
+            </div>
+
+            <button type="submit" class="submit-btn">Login</button>
+          </form>
+        </div>
+
+        <div id="signupView" class="hidden">
+          <h2><b>Create Account</b></h2>
+          <p>Use your email and username to create a new account.</p>
+          <div id="signupError" class="auth-error"></div>
+          <div id="signupSuccess" class="auth-success"></div>
+          <form id="signupForm">
+            <div class="input-group">
+              <label for="signupUsername"></label>
+              <input
+                id="signupUsername"
+                name="username"
+                type="text"
+                placeholder="Username"
+                required
+              />
+            </div>
+
+            <div class="input-group">
+              <label for="signupEmail"></label>
+              <input
+                id="signupEmail"
+                name="email"
+                type="email"
+                placeholder="Email"
+                required
+              />
+            </div>
+
+            <div class="input-group">
+              <label for="signupPassword"></label>
+              <input
+                id="signupPassword"
+                name="password"
+                type="password"
+                placeholder="Password"
+                required
+              />
+            </div>
+
+            <button type="submit" class="submit-btn">Create Account</button>
+          </form>
+        </div>
+
+        <button class="close-btn" onclick="toggleModal()">Close</button>
+      </div>
+    </div>
+  </body>
+  <script
+    src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.8/dist/js/bootstrap.bundle.min.js"
+    integrity="sha384-FKyoEForCGlyvwx9Hj09JcYn3nv7wiPVlz7YYwJrWVcXK/BmnVDxM+D2scQbITxI"
+    crossorigin="anonymous"
+  ></script>
+  <script src="/js/homePage.js"></script>
+</html>
