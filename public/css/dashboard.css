@@ -589,7 +589,7 @@ body.sidebar-open .sidebar-open-button {
 .ticker-track {
   display: inline-flex;
   gap: 1.5rem;
-  animation: tickerMove 30s linear infinite;
+  animation: tickerMove 150s linear infinite;
   white-space: nowrap;
   will-change: transform;
 }

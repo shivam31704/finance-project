@@ -1,87 +1,208 @@
-// Top 10 Indian stocks to track using Alpha Vantage symbol suffixes
-const DEFAULT_STOCKS = [
-  "RELIANCE.NS",
-  "TCS.NS",
-  "HDFCBANK.NS",
-  "ICICIBANK.NS",
-  "INFY.NS",
-  "HINDUNILVR.NS",
-  "SBIN.NS",
-  "AXISBANK.NS",
-  "LT.NS",
-  "BHARTIARTL.NS",
-];
-
-// In-memory cache for stock data with analysis
+// Stock state management
 let stockDataCache = {};
 let analysisCache = {};
+let stockFetchErrors = {}; // Track errors per stock
+let loadingState = {
+  isLoading: false,
+  hasError: false,
+  errorMessage: "",
+};
 
-// Stock name mapping for Indian companies
+// Using US stocks that work with free Finnhub tier
+// (NSE symbols require paid Finnhub subscription)
+const DEFAULT_STOCKS = [
+  "AAPL", // Apple
+  "MSFT", // Microsoft
+  "GOOGL", // Google
+  "AMZN", // Amazon
+  "TSLA", // Tesla
+  "NVDA", // Nvidia
+  "META", // Meta
+  "NFLX", // Netflix
+  "INTC", // Intel
+  "AMD", // AMD
+];
+
+// Stock names mapping for US stocks
 const STOCK_NAMES = {
-  "RELIANCE.NS": "Reliance Industries",
-  "TCS.NS": "Tata Consultancy Services",
-  "HDFCBANK.NS": "HDFC Bank",
-  "ICICIBANK.NS": "ICICI Bank",
-  "INFY.NS": "Infosys",
-  "HINDUNILVR.NS": "Hindustan Unilever",
-  "SBIN.NS": "State Bank of India",
-  "AXISBANK.NS": "Axis Bank",
-  "LT.NS": "Larsen & Toubro",
-  "BHARTIARTL.NS": "Bharti Airtel",
+  AAPL: "Apple Inc.",
+  MSFT: "Microsoft Corporation",
+  GOOGL: "Alphabet Inc. (Google)",
+  AMZN: "Amazon.com Inc.",
+  TSLA: "Tesla Inc.",
+  NVDA: "NVIDIA Corporation",
+  META: "Meta Platforms (Facebook)",
+  NFLX: "Netflix Inc.",
+  INTC: "Intel Corporation",
+  AMD: "Advanced Micro Devices",
 };
 
 function getDisplaySymbol(symbol) {
-  return symbol.replace(/\.(NS|BSE)$/i, "");
+  // Remove market suffix if present (e.g., .NS, .BSE, .L)
+  return symbol.replace(/\.(NS|BSE|L|TO|V)$/i, "");
 }
 
-// Fetch real stock data from backend API
-async function fetchStockData(symbol) {
+// Fetch real stock data from backend API with proper error handling
+async function fetchStockData(symbol, retryCount = 0) {
+  const maxRetries = 2;
+
   try {
-    const response = await fetch(`/api/stock/${symbol}`);
-    const data = await response.json();
-    if (data.success) {
-      stockDataCache[symbol] = {
-        symbol: data.symbol,
-        displaySymbol: getDisplaySymbol(data.symbol),
-        name: STOCK_NAMES[data.symbol] || getDisplaySymbol(data.symbol),
-        price: data.price,
-        change: data.change,
-        changePct: data.changePct,
-        timestamp: data.timestamp,
+    console.log(`[FETCH] ${symbol} (attempt ${retryCount + 1})`);
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+
+    const response = await fetch(`/api/stock/${symbol}`, {
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    // ✅ Check response status
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error(
+        `[ERROR] ${symbol} - Status ${response.status}:`,
+        errorData.message,
+      );
+
+      stockFetchErrors[symbol] = {
+        error: errorData.message || "Failed to fetch stock data",
+        status: response.status,
+        timestamp: new Date().toLocaleTimeString(),
       };
-      return stockDataCache[symbol];
+
+      // Retry on 5xx errors, not 4xx
+      if (response.status >= 500 && retryCount < maxRetries) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, 1000 * (retryCount + 1)),
+        ); // Exponential backoff
+        return fetchStockData(symbol, retryCount + 1);
+      }
+
+      return null;
     }
+
+    const data = await response.json();
+
+    if (!data.success) {
+      console.error(`[ERROR] ${symbol} - API returned error:`, data.message);
+      stockFetchErrors[symbol] = {
+        error: data.message || "Invalid stock data",
+        timestamp: new Date().toLocaleTimeString(),
+      };
+      return null;
+    }
+
+    // ✅ Validate data structure
+    if (!data.price || typeof data.price !== "number") {
+      console.error(`[ERROR] ${symbol} - Invalid price data:`, data);
+      stockFetchErrors[symbol] = {
+        error: "Invalid price data received",
+        timestamp: new Date().toLocaleTimeString(),
+      };
+      return null;
+    }
+
+    // ✅ Cache successful data
+    stockDataCache[symbol] = {
+      symbol: data.symbol,
+      displaySymbol: getDisplaySymbol(data.symbol),
+      name: STOCK_NAMES[data.symbol] || getDisplaySymbol(data.symbol),
+      price: data.price,
+      change: data.change,
+      changePct: data.changePct,
+      timestamp: data.timestamp,
+    };
+
+    // Clear error for this stock on success
+    delete stockFetchErrors[symbol];
+
+    console.log(`[SUCCESS] ${symbol} - $${data.price.toFixed(2)}`);
+    return stockDataCache[symbol];
   } catch (error) {
-    console.error(`Error fetching stock ${symbol}:`, error);
+    console.error(`[ERROR] ${symbol} - Exception:`, error.message);
+
+    stockFetchErrors[symbol] = {
+      error: error.message || "Network error",
+      timestamp: new Date().toLocaleTimeString(),
+    };
+
+    // Retry on network errors
+    if (retryCount < maxRetries && error instanceof TypeError) {
+      await new Promise((resolve) =>
+        setTimeout(resolve, 1000 * (retryCount + 1)),
+      );
+      return fetchStockData(symbol, retryCount + 1);
+    }
+
+    return null;
   }
-  return null;
 }
 
 // Fetch detailed analysis with technical indicators and risk factors
 async function fetchStockAnalysis(symbol) {
   try {
     const response = await fetch(`/api/stock-analysis/${symbol}`);
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error(`[ERROR] Analysis for ${symbol}:`, errorData.message);
+      return null;
+    }
+
     const data = await response.json();
     if (data.success) {
       analysisCache[symbol] = data;
       return data;
     }
   } catch (error) {
-    console.error(`Error fetching analysis for ${symbol}:`, error);
+    console.error(`[ERROR] Exception fetching analysis for ${symbol}:`, error);
   }
   return null;
 }
 
-// Update all stock data at once
+// Update all stock data at once - PARALLEL fetching
 async function updateAllStockData() {
   const stockSymbols = DEFAULT_STOCKS;
-  for (const symbol of stockSymbols) {
-    await fetchStockData(symbol);
-  }
-  renderStocks();
-  renderFavorites();
-}
 
+  loadingState.isLoading = true;
+  loadingState.hasError = false;
+  loadingState.errorMessage = "";
+  stockFetchErrors = {};
+
+  console.log(`[START] Fetching ${stockSymbols.length} stocks in parallel...`);
+
+  try {
+    // ✅ Use Promise.all() for parallel fetching instead of sequential await
+    const results = await Promise.all(
+      stockSymbols.map((symbol) => fetchStockData(symbol)),
+    );
+
+    const successCount = results.filter(Boolean).length;
+    const failureCount = stockSymbols.length - successCount;
+
+    console.log(
+      `[COMPLETE] Fetched ${successCount}/${stockSymbols.length} stocks`,
+    );
+
+    if (failureCount > 0) {
+      loadingState.hasError = true;
+      loadingState.errorMessage = `⚠️ ${failureCount} stock(s) failed to load. Check API key or symbols.`;
+      console.warn(`[WARN] ${failureCount} stocks failed to fetch`);
+    }
+    loadingState.isLoading = false;
+    renderStocks();
+    renderFavorites();
+  } catch (error) {
+    console.error("[ERROR] Critical error in updateAllStockData:", error);
+    loadingState.hasError = true;
+    loadingState.errorMessage =
+      "Critical error loading stocks. Please refresh the page.";
+    loadingState.isLoading = false;
+    renderStocks();
+  }
+}
 const newsItems = [
   {
     headline: "US-China tariff talks drive semiconductor demand",
@@ -182,18 +303,77 @@ function renderStocks() {
   const container = document.getElementById("stocksGrid");
   const favorites = new Set(loadFavorites());
 
-  // Use cached data or show loading state
+  // Use cached data or show loading/error state
   const stocks = DEFAULT_STOCKS.map((symbol) => stockDataCache[symbol]).filter(
     Boolean,
   );
 
-  if (stocks.length === 0) {
+  // ✅ Show Loading State
+  if (loadingState.isLoading) {
     container.innerHTML =
-      '<p style="text-align: center; color: rgba(255, 255, 255, 0.7); grid-column: 1/-1;">Loading stock data...</p>';
+      '<div style="text-align: center; color: rgba(255, 255, 255, 0.7); grid-column: 1/-1; padding: 40px;">' +
+      '<i class="fa-solid fa-spinner" style="animation: spin 1s linear infinite; font-size: 24px; margin-bottom: 10px;"></i>' +
+      "<p>Loading stock data...</p></div>";
     return;
   }
 
-  container.innerHTML = stocks
+  // ✅ Show Error State with Details
+  if (stocks.length === 0 && Object.keys(stockFetchErrors).length > 0) {
+    let errorHtml = '<div style="grid-column: 1/-1; padding: 20px;">';
+    errorHtml +=
+      '<div style="background: rgba(255, 107, 107, 0.2); border-left: 4px solid #ff6b6b; padding: 16px; border-radius: 6px; margin-bottom: 20px;">';
+    errorHtml +=
+      '<div style="color: #ff6b6b; font-weight: bold; margin-bottom: 10px;">⚠️ Failed to Load Stock Data</div>';
+    errorHtml += '<div style="color: rgba(255,255,255,0.8); font-size: 14px;">';
+
+    Object.entries(stockFetchErrors).forEach(([symbol, errorInfo]) => {
+      errorHtml += `<div style="margin-bottom: 8px;">`;
+      errorHtml += `<strong>${symbol}</strong>: ${errorInfo.error}`;
+      errorHtml += `</div>`;
+    });
+
+    errorHtml += "</div></div>";
+    errorHtml += '<div style="color: rgba(255,255,255,0.6); font-size: 13px;">';
+    errorHtml += "<p><strong>Possible issues:</strong></p>";
+    errorHtml += '<ul style="margin: 10px 0; padding-left: 20px;">';
+    errorHtml += "<li>Invalid API key or quota exceeded</li>";
+    errorHtml += "<li>Network connection error</li>";
+    errorHtml += "<li>Stock symbol not found or not supported</li>";
+    errorHtml += "<li>API rate limit exceeded (5 requests/minute)</li>";
+    errorHtml += "</ul>";
+    errorHtml +=
+      '<p><button onclick="location.reload()" style="background: #64ffc8; color: #1a1a2e; border: none; padding: 8px 16px; border-radius: 4px; cursor: pointer; font-weight: bold;">Retry Loading</button></p>';
+    errorHtml += "</div>";
+    errorHtml += "</div>";
+
+    container.innerHTML = errorHtml;
+    return;
+  }
+
+  // ✅ Show Warning if some stocks failed but some loaded
+  if (loadingState.hasError && stocks.length > 0) {
+    const warningDiv = document.createElement("div");
+    warningDiv.style.cssText = `
+      grid-column: 1/-1;
+      background: rgba(255, 165, 0, 0.2);
+      border-left: 4px solid #ffa500;
+      padding: 12px;
+      border-radius: 6px;
+      color: #ffa500;
+      font-size: 13px;
+      margin-bottom: 10px;
+    `;
+    warningDiv.innerHTML = `
+      ⚠️ ${loadingState.errorMessage}
+      <br><small style="color: rgba(255,255,255,0.5); display: block; margin-top: 6px;">
+        Loaded: ${stocks.length}/${DEFAULT_STOCKS.length} stocks
+      </small>
+    `;
+    container.prepend(warningDiv);
+  }
+
+  // ✅ Show Stock Cards
+  const stockCardsHtml = stocks
     .map((stock) => {
       const isFav = favorites.has(stock.symbol);
       const changeClass = stock.change >= 0 ? "positive" : "negative";
@@ -221,6 +401,25 @@ function renderStocks() {
     })
     .join("");
 
+  // Clear previous content and add stock cards
+  if (stocks.length > 0) {
+    // Keep warning if it exists, just update cards
+    const existingWarning = container.querySelector('[style*="grid-column"]');
+    if (existingWarning && Object.keys(stockFetchErrors).length > 0) {
+      container.innerHTML = existingWarning.outerHTML + stockCardsHtml;
+    } else {
+      container.innerHTML = stockCardsHtml;
+    }
+  } else {
+    container.innerHTML = `
+      <div style="text-align: center; color: rgba(255, 255, 255, 0.7); grid-column: 1/-1; padding: 40px;">
+        <p>No stocks loaded. Check your API configuration.</p>
+      </div>
+    `;
+    return;
+  }
+
+  // ✅ Attach event listeners
   container.querySelectorAll(".stock-fav").forEach((button) => {
     button.addEventListener("click", (event) => {
       event.stopPropagation();
@@ -237,7 +436,6 @@ function renderStocks() {
     });
   });
 
-  // Add click handler to view detailed analysis
   container.querySelectorAll(".stock-card").forEach((card) => {
     card.addEventListener("click", () => {
       const symbol = card.dataset.symbol;
@@ -315,14 +513,33 @@ function renderNews() {
 
   // Show loading state
   grid.innerHTML =
-    '<p style="text-align: center; color: rgba(255, 255, 255, 0.7); grid-column: 1/-1;">Loading news...</p>';
+    '<div style="text-align: center; color: rgba(255, 255, 255, 0.7); grid-column: 1/-1; padding: 40px;">' +
+    '<i class="fa-solid fa-spinner" style="animation: spin 1s linear infinite; font-size: 24px; margin-bottom: 10px;"></i>' +
+    "<p>Loading financial news...</p></div>";
 
   // Fetch news from API
   fetch("/api/news")
-    .then((res) => res.json())
+    .then((res) => {
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+      }
+      return res.json();
+    })
     .then((data) => {
-      if (!data.success) {
-        grid.innerHTML = `<p style="text-align: center; color: rgba(255, 255, 255, 0.7); grid-column: 1/-1;">⚠️ ${data.message}</p>`;
+      if (!data.success || !data.articles || data.articles.length === 0) {
+        grid.innerHTML = `
+          <div style="text-align: center; color: rgba(255, 255, 255, 0.7); grid-column: 1/-1; padding: 40px;">
+            <p>⚠️ ${data.message || "No news available"}</p>
+            <p style="font-size: 12px; color: rgba(255,255,255,0.5); margin-top: 10px;">
+              Using fallback news data...
+            </p>
+          </div>
+        `;
+        // Show fallback news
+        ticker.innerHTML = newsItems
+          .map((item) => `<span>${item.headline}</span>`)
+          .join("<span class='ticker-divider'>•</span>");
+        grid.innerHTML += renderNewsCards(newsItems);
         return;
       }
 
@@ -334,45 +551,45 @@ function renderNews() {
         .join("<span class='ticker-divider'>•</span>");
 
       // Render news grid with cards
-      grid.innerHTML = articles
-        .map(
-          (item) => `
-            <article class="news-card card-glow">
-              <div class="news-image" style="background-image: url('${item.image}')"></div>
-              <div class="news-content">
-                <a href="${item.url}" target="_blank" rel="noopener noreferrer" title="Read full article"></a>
-                <span class="news-source">${item.source}</span>
-                <h3>${item.headline}</h3>
-                <p>${item.summary}</p>
-              </div>
-            </article>
-          `,
-        )
-        .join("");
+      grid.innerHTML = renderNewsCards(articles);
     })
     .catch((error) => {
-      console.error("Error fetching news:", error);
-      grid.innerHTML = `<p style="text-align: center; color: rgba(255, 255, 255, 0.7); grid-column: 1/-1;">Failed to load news. Check console for details.</p>`;
+      console.error("[ERROR] Error fetching news:", error);
+
+      // Show error state with fallback
+      grid.innerHTML = `
+        <div style="text-align: center; color: rgba(255, 255, 255, 0.7); grid-column: 1/-1; padding: 40px;">
+          <p>❌ ${error.message || "Failed to load news"}</p>
+          <p style="font-size: 12px; color: rgba(255,255,255,0.5); margin-top: 10px;">
+            Using fallback news data...
+          </p>
+        </div>
+      `;
+
       // Fallback to static news if API fails
       ticker.innerHTML = newsItems
         .map((item) => `<span>${item.headline}</span>`)
         .join("<span class='ticker-divider'>•</span>");
-      grid.innerHTML = newsItems
-        .map(
-          (item) => `
-            <article class="news-card card-glow">
-              <div class="news-image" style="background-image: url('${item.image}')"></div>
-              <div class="news-content">
-                <a href="javascript:void(0);" title="Read more"></a>
-                <span class="news-source">${item.source}</span>
-                <h3>${item.headline}</h3>
-                <p>${item.summary}</p>
-              </div>
-            </article>
-          `,
-        )
-        .join("");
+      grid.innerHTML += renderNewsCards(newsItems);
     });
+}
+
+function renderNewsCards(articles) {
+  return articles
+    .map(
+      (item) => `
+        <article class="news-card card-glow">
+          <div class="news-image" style="background-image: url('${item.image}')"></div>
+          <div class="news-content">
+            <a href="${item.url}" target="_blank" rel="noopener noreferrer" title="Read full article"></a>
+            <span class="news-source">${item.source}</span>
+            <h3>${item.headline}</h3>
+            <p>${item.summary}</p>
+          </div>
+        </article>
+      `,
+    )
+    .join("");
 }
 
 function renderSettings() {
@@ -393,7 +610,71 @@ function applyTheme(darkMode) {
 async function showStockAnalysis(symbol) {
   // Fetch analysis if not cached
   if (!analysisCache[symbol]) {
-    await fetchStockAnalysis(symbol);
+    const analysis = await fetchStockAnalysis(symbol);
+    if (!analysis) {
+      // ✅ Show user-friendly error message
+      const errorModal = document.createElement("div");
+      errorModal.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0,0,0,0.7);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 1000;
+        backdrop-filter: blur(4px);
+      `;
+
+      const errorContent = document.createElement("div");
+      errorContent.style.cssText = `
+        background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+        border: 1px solid rgba(255, 107, 107, 0.3);
+        border-radius: 12px;
+        padding: 24px;
+        max-width: 500px;
+        width: 90%;
+        box-shadow: 0 8px 32px rgba(255, 107, 107, 0.1);
+      `;
+
+      errorContent.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+          <h2 style="margin: 0; color: #ff6b6b;">⚠️ Error Loading Analysis</h2>
+          <button onclick="this.closest('div').parentElement.remove()" style="background: none; border: none; color: #fff; font-size: 24px; cursor: pointer;">&times;</button>
+        </div>
+        
+        <div style="color: rgba(255,255,255,0.8); margin-bottom: 20px;">
+          <p>Unable to load detailed analysis for <strong>${symbol}</strong>.</p>
+          <p style="font-size: 13px; color: rgba(255,255,255,0.6); margin-top: 10px;">
+            Possible causes:
+          </p>
+          <ul style="font-size: 13px; color: rgba(255,255,255,0.6); margin: 5px 0; padding-left: 20px;">
+            <li>API rate limit exceeded</li>
+            <li>Insufficient historical data</li>
+            <li>Stock symbol not found</li>
+            <li>Network connectivity issue</li>
+          </ul>
+        </div>
+        
+        <button onclick="this.closest('div').parentElement.remove(); updateAllStockData();" 
+          style="width: 100%; padding: 10px; background: #64ffc8; color: #1a1a2e; border: none; border-radius: 6px; cursor: pointer; font-weight: bold;">
+          Retry
+        </button>
+      `;
+
+      errorModal.appendChild(errorContent);
+      document.body.appendChild(errorModal);
+
+      errorModal.addEventListener("click", (e) => {
+        if (e.target === errorModal) {
+          errorModal.remove();
+        }
+      });
+
+      return;
+    }
   }
 
   const analysis = analysisCache[symbol];
@@ -441,7 +722,7 @@ async function showStockAnalysis(symbol) {
   content.innerHTML = `
     <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
       <h2 style="margin: 0; color: #64ffc8;">${symbol}</h2>
-      <button onclick="this.closest('.stock-analysis-modal').remove()" style="background: none; border: none; color: #fff; font-size: 24px; cursor: pointer;">&times;</button>
+      <button onclick="this.closest('div').closest('div').parentElement.remove()" style="background: none; border: none; color: #fff; font-size: 24px; cursor: pointer;">&times;</button>
     </div>
 
     <div style="margin-bottom: 24px; padding: 12px; background: rgba(100, 255, 200, 0.1); border-left: 3px solid #64ffc8; border-radius: 4px;">
@@ -624,4 +905,11 @@ function initDashboard() {
   window.addEventListener("focus", updateAllStockData);
 }
 
-window.addEventListener("DOMContentLoaded", initDashboard);
+// Initialize immediately since script is loaded at end of HTML
+// DOMContentLoaded will have already fired by this point
+if (document.readyState === "loading") {
+  window.addEventListener("DOMContentLoaded", initDashboard);
+} else {
+  // DOM is already loaded, initialize immediately
+  initDashboard();
+}

@@ -1,6 +1,7 @@
 const users = [
   {
     username: "testuser",
+    email: "testuser@example.com",
     password: "ZonicDemo!23",
     name: "Test User",
   },

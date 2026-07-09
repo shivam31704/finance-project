@@ -10,10 +10,60 @@ const {
 
 const router = express.Router();
 
-// API Keys - Replace with your own keys from newsapi.org and alphavantage.co
+// API Keys - Replace with your own keys from newsapi.org and finnhub.io
 const NEWS_API_KEY =
   process.env.NEWS_API_KEY || "ac1f2d65de8b4c0fb9ffddbed97830af";
-const ALPHA_VANTAGE_KEY = process.env.ALPHA_VANTAGE_KEY || "96UI4G6Z6ZX5K30P";
+
+// ⚠️ IMPORTANT: Trim whitespace from API key (fixes 401 errors)
+const FINNHUB_KEY = (
+  process.env.FINNHUB_KEY || "your_finnhub_api_key_here"
+).trim();
+
+// Debug: Log if API key is missing or placeholder
+if (!FINNHUB_KEY || FINNHUB_KEY === "your_finnhub_api_key_here") {
+  console.warn("[WARN] FINNHUB_KEY is not configured or is using placeholder!");
+}
+
+// In-memory cache with TTL and max size limit to prevent memory leak
+const cache = new Map();
+const CACHE_TTL = 60000; // 60 seconds
+const MAX_CACHE_SIZE = 500; // Prevent unlimited growth
+
+function getCache(key) {
+  const cached = cache.get(key);
+  if (!cached) return null;
+  if (Date.now() - cached.timestamp > CACHE_TTL) {
+    cache.delete(key);
+    return null;
+  }
+  return cached.data;
+}
+
+function setCache(key, data) {
+  // Remove oldest entry if cache is full
+  if (cache.size >= MAX_CACHE_SIZE) {
+    const firstKey = cache.keys().next().value;
+    cache.delete(firstKey);
+  }
+  cache.set(key, { data, timestamp: Date.now() });
+}
+
+function clearCache(key) {
+  if (key) {
+    cache.delete(key);
+  } else {
+    cache.clear();
+  }
+}
+
+// Validate stock symbol format (prevent injection attacks)
+function validateSymbol(symbol) {
+  // Allow only alphanumeric and dots (e.g., AAPL, INFY.NS)
+  if (!/^[A-Z0-9]{1,10}(\.?[A-Z]{1,3})?$/i.test(symbol)) {
+    throw new Error("Invalid symbol format");
+  }
+  return symbol.toUpperCase();
+}
 
 router.get("/", (req, res) => {
   res.render("homePage.ejs");
@@ -104,6 +154,8 @@ router.get("/logout", (req, res) => {
 // Fetch financial news from NewsAPI
 router.get("/api/news", async (req, res) => {
   try {
+    console.log("[API CALL] Fetching news from NewsAPI");
+
     const response = await axios.get("https://newsapi.org/v2/everything", {
       params: {
         q: "stocks OR finance OR market",
@@ -112,7 +164,17 @@ router.get("/api/news", async (req, res) => {
         pageSize: 12,
         apiKey: NEWS_API_KEY,
       },
+      timeout: 5000,
     });
+
+    if (!response.data.articles || response.data.articles.length === 0) {
+      console.warn("[WARNING] No news articles returned from NewsAPI");
+      return res.status(404).json({
+        success: false,
+        message: "No news articles found",
+        error: "NO_DATA",
+      });
+    }
 
     const articles = response.data.articles.map((article) => ({
       headline: article.title,
@@ -127,50 +189,119 @@ router.get("/api/news", async (req, res) => {
 
     res.json({ success: true, articles });
   } catch (error) {
-    console.error("NewsAPI Error:", error.message);
+    console.error("[ERROR] NewsAPI Error:", {
+      message: error.message,
+      code: error.code,
+      status: error.response?.status,
+    });
+
     res.status(500).json({
       success: false,
       message:
-        "Failed to fetch news. Make sure you have set up the NEWS_API_KEY.",
+        "Failed to fetch news. Please check your NEWS_API_KEY configuration.",
       error: error.message,
     });
   }
 });
 
-// Fetch stock quote from Alpha Vantage
+// Fetch stock quote from Finnhub (free tier supports US stocks only)
+// For NSE/international stocks, upgrade to paid Finnhub plan or use different API
 router.get("/api/stock/:symbol", async (req, res) => {
   try {
-    const { symbol } = req.params;
-    const response = await axios.get("https://www.alphavantage.co/query", {
-      params: {
-        function: "GLOBAL_QUOTE",
-        symbol: symbol.toUpperCase(),
-        apikey: ALPHA_VANTAGE_KEY,
-      },
-    });
+    let { symbol } = req.params;
 
-    const quote = response.data["Global Quote"];
-    if (!quote || !quote["05. price"]) {
-      return res.status(404).json({
+    // Validate symbol format
+    try {
+      symbol = validateSymbol(symbol);
+    } catch (err) {
+      return res.status(400).json({
         success: false,
-        message: "Stock not found or API limit reached",
+        message: "Invalid stock symbol format",
+        error: err.message,
       });
     }
 
-    res.json({
+    // Check cache first
+    const cacheKey = `stock_${symbol}`;
+    const cachedData = getCache(cacheKey);
+    if (cachedData) {
+      console.log(`[CACHE HIT] ${symbol}`);
+      return res.json(cachedData);
+    }
+
+    console.log(`[API CALL] Fetching stock quote for ${symbol} from Finnhub`);
+    console.log(
+      `[DEBUG] Using Finnhub key (first 10 chars): ${FINNHUB_KEY.substring(0, 10)}...`,
+    );
+
+    const response = await axios.get("https://finnhub.io/api/v1/quote", {
+      params: {
+        symbol: symbol.toUpperCase(),
+        token: FINNHUB_KEY,
+      },
+      timeout: 5000,
+    });
+
+    const data = response.data;
+
+    // Finnhub returns: c (current price), d (change), dp (change percent), t (timestamp)
+    if (!data.c || data.c === 0) {
+      console.error(`[ERROR] Invalid stock data for ${symbol}:`, data);
+      return res.status(404).json({
+        success: false,
+        message: `Stock symbol not found: ${symbol}. Please check the symbol and try again.`,
+        error: "INVALID_SYMBOL",
+      });
+    }
+
+    const responseData = {
       success: true,
       symbol: symbol.toUpperCase(),
-      price: parseFloat(quote["05. price"]),
-      change: parseFloat(quote["09. change"]),
-      changePct: parseFloat(quote["10. change percent"]),
-      timestamp: quote["07. latest trading day"],
-    });
+      price: data.c,
+      change: data.d || 0,
+      changePct: data.dp || 0,
+      timestamp: new Date(data.t * 1000).toISOString(),
+      high: data.h || null,
+      low: data.l || null,
+      open: data.o || null,
+      previousClose: data.pc || null,
+    };
+
+    // Cache the response
+    setCache(cacheKey, responseData);
+
+    res.json(responseData);
   } catch (error) {
-    console.error("Alpha Vantage Error:", error.message);
+    console.error(`[ERROR] Finnhub API Error for ${req.params.symbol}:`, {
+      message: error.message,
+      code: error.code,
+      status: error.response?.status,
+      responseData: error.response?.data,
+      fullError: error.toJSON ? error.toJSON() : error,
+    });
+    console.error(`[DEBUG] Request was:`, {
+      url: "https://finnhub.io/api/v1/quote",
+      params: {
+        symbol: req.params.symbol,
+        token: FINNHUB_KEY.substring(0, 5) + "...",
+      },
+    });
+
+    // Better error messaging based on status code
+    let errorMessage = "Failed to fetch stock data. Please try again later.";
+    if (error.response?.status === 401) {
+      errorMessage =
+        "API Key is invalid or expired. Please check your FINNHUB_KEY in .env";
+    } else if (error.response?.status === 403) {
+      errorMessage =
+        "API access forbidden. Check your Finnhub account/subscription.";
+    } else if (error.response?.status === 429) {
+      errorMessage = "Rate limit exceeded. Please wait a moment and try again.";
+    }
+
     res.status(500).json({
       success: false,
-      message:
-        "Failed to fetch stock data. Make sure you have set up the ALPHA_VANTAGE_KEY.",
+      message: errorMessage,
       error: error.message,
     });
   }
@@ -179,47 +310,91 @@ router.get("/api/stock/:symbol", async (req, res) => {
 // Fetch daily time series data for historical analysis
 router.get("/api/stock-history/:symbol", async (req, res) => {
   try {
-    const { symbol } = req.params;
-    const response = await axios.get("https://www.alphavantage.co/query", {
-      params: {
-        function: "TIME_SERIES_DAILY",
-        symbol: symbol.toUpperCase(),
-        outputsize: "full",
-        apikey: ALPHA_VANTAGE_KEY,
-      },
-    });
+    let { symbol } = req.params;
 
-    const timeSeries = response.data["Time Series (Daily)"];
-    if (!timeSeries) {
-      return res.status(404).json({
+    // Validate symbol format
+    try {
+      symbol = validateSymbol(symbol);
+    } catch (err) {
+      return res.status(400).json({
         success: false,
-        message: "Stock history not found or API limit reached",
+        message: "Invalid stock symbol format",
+        error: err.message,
       });
     }
 
-    // Convert to array and limit to last 60 days for performance
-    const history = Object.entries(timeSeries)
-      .slice(0, 60)
-      .map(([date, data]) => ({
-        date,
-        open: parseFloat(data["1. open"]),
-        high: parseFloat(data["2. high"]),
-        low: parseFloat(data["3. low"]),
-        close: parseFloat(data["4. close"]),
-        volume: parseInt(data["5. volume"]),
-      }))
-      .reverse();
+    // Check cache first
+    const cacheKey = `history_${symbol}`;
+    const cachedData = getCache(cacheKey);
+    if (cachedData) {
+      console.log(`[CACHE HIT] History for ${symbol}`);
+      return res.json(cachedData);
+    }
 
-    res.json({
+    console.log(`[API CALL] Fetching history for ${symbol} from Finnhub`);
+
+    // Finnhub candles endpoint (daily data)
+    const response = await axios.get("https://finnhub.io/api/v1/stock/candle", {
+      params: {
+        symbol: symbol.toUpperCase(),
+        resolution: "D",
+        from: Math.floor(Date.now() / 1000) - 60 * 24 * 60 * 60, // 60 days ago
+        to: Math.floor(Date.now() / 1000),
+        token: FINNHUB_KEY,
+      },
+      timeout: 5000,
+    });
+
+    const data = response.data;
+
+    if (!data.c || data.c.length === 0) {
+      console.error(`[ERROR] No history data for ${symbol}`);
+      return res.status(404).json({
+        success: false,
+        message: "Stock history not found",
+        error: "NO_DATA",
+      });
+    }
+
+    // Transform Finnhub response to expected format
+    const history = data.t.map((timestamp, index) => ({
+      date: new Date(timestamp * 1000).toISOString().split("T")[0],
+      open: data.o ? data.o[index] : null,
+      high: data.h ? data.h[index] : null,
+      low: data.l ? data.l[index] : null,
+      close: data.c[index],
+      volume: data.v ? data.v[index] : 0,
+    }));
+
+    const responseData = {
       success: true,
       symbol: symbol.toUpperCase(),
       data: history,
-    });
+    };
+
+    // Cache the response
+    setCache(cacheKey, responseData);
+
+    res.json(responseData);
   } catch (error) {
-    console.error("Alpha Vantage History Error:", error.message);
+    console.error(`[ERROR] Finnhub History Error for ${req.params.symbol}:`, {
+      message: error.message,
+      code: error.code,
+      status: error.response?.status,
+      responseData: error.response?.data,
+      fullError: error.toJSON ? error.toJSON() : error,
+    });
+
+    let errorMessage = "Failed to fetch stock history";
+    if (error.response?.status === 401) {
+      errorMessage = "API Key is invalid or expired.";
+    } else if (error.response?.status === 429) {
+      errorMessage = "Rate limit exceeded. Please wait.";
+    }
+
     res.status(500).json({
       success: false,
-      message: "Failed to fetch stock history",
+      message: errorMessage,
       error: error.message,
     });
   }
@@ -265,9 +440,14 @@ function calculateMACD(prices) {
 }
 
 function calculateEMA(prices, period) {
+  // Guard against invalid input
+  if (!prices || prices.length === 0) return null;
+  if (prices.length === 1) return prices[0];
+
   const k = 2 / (period + 1);
   let ema = prices[0];
   for (let i = 1; i < prices.length; i++) {
+    if (typeof prices[i] !== "number" || isNaN(prices[i])) continue;
     ema = prices[i] * k + ema * (1 - k);
   }
   return ema;
@@ -372,75 +552,102 @@ function identifyPatterns(prices) {
   return patterns;
 }
 
-// Combined analysis endpoint
+// Combined analysis endpoint with technical indicators
 router.get("/api/stock-analysis/:symbol", async (req, res) => {
   try {
-    const { symbol } = req.params;
+    let { symbol } = req.params;
 
-    // Get current quote
-    const quoteResponse = await axios.get("https://www.alphavantage.co/query", {
-      params: {
-        function: "GLOBAL_QUOTE",
-        symbol: symbol.toUpperCase(),
-        apikey: ALPHA_VANTAGE_KEY,
-      },
-    });
-
-    const quote = quoteResponse.data["Global Quote"];
-    if (!quote || !quote["05. price"]) {
-      return res.status(404).json({
+    // Validate symbol format
+    try {
+      symbol = validateSymbol(symbol);
+    } catch (err) {
+      return res.status(400).json({
         success: false,
-        message: "Stock not found or API limit reached",
+        message: "Invalid stock symbol format",
+        error: err.message,
       });
     }
 
-    // Get historical data
-    const historyResponse = await axios.get(
-      "https://www.alphavantage.co/query",
-      {
-        params: {
-          function: "TIME_SERIES_DAILY",
-          symbol: symbol.toUpperCase(),
-          outputsize: "full",
-          apikey: ALPHA_VANTAGE_KEY,
-        },
-      },
-    );
-
-    const timeSeries = historyResponse.data["Time Series (Daily)"];
-    let history = [];
-    let closes = [];
-    let avgVolume = 0;
-
-    if (timeSeries) {
-      history = Object.entries(timeSeries)
-        .slice(0, 60)
-        .map(([date, data]) => ({
-          date,
-          open: parseFloat(data["1. open"]),
-          high: parseFloat(data["2. high"]),
-          low: parseFloat(data["3. low"]),
-          close: parseFloat(data["4. close"]),
-          volume: parseInt(data["5. volume"]),
-        }))
-        .reverse();
-
-      closes = history.map((h) => h.close);
-      avgVolume =
-        history.reduce((sum, h) => sum + h.volume, 0) / history.length;
+    // Check cache first
+    const cacheKey = `analysis_${symbol}`;
+    const cachedData = getCache(cacheKey);
+    if (cachedData) {
+      console.log(`[CACHE HIT] Analysis for ${symbol}`);
+      return res.json(cachedData);
     }
 
-    const currentPrice = parseFloat(quote["05. price"]);
-    const previousPrice =
-      history.length > 1 ? history[history.length - 2].close : currentPrice;
-    const currentVolume = parseInt(quote["06. volume"]) || 0;
+    console.log(`[API CALL] Fetching analysis for ${symbol} from Finnhub`);
 
+    // Parallel requests for efficiency
+    const [quoteResponse, historyResponse] = await Promise.all([
+      axios.get("https://finnhub.io/api/v1/quote", {
+        params: {
+          symbol: symbol.toUpperCase(),
+          token: FINNHUB_KEY,
+        },
+        timeout: 5000,
+      }),
+      axios.get("https://finnhub.io/api/v1/stock/candle", {
+        params: {
+          symbol: symbol.toUpperCase(),
+          resolution: "D",
+          from: Math.floor(Date.now() / 1000) - 90 * 24 * 60 * 60, // 90 days for analysis
+          to: Math.floor(Date.now() / 1000),
+          token: FINNHUB_KEY,
+        },
+        timeout: 5000,
+      }),
+    ]);
+
+    const quote = quoteResponse.data;
+    const historyData = historyResponse.data;
+
+    if (!quote.c || quote.c === 0) {
+      console.error(`[ERROR] Invalid stock data for ${symbol}`);
+      return res.status(404).json({
+        success: false,
+        message: `Stock symbol not found: ${symbol}`,
+        error: "INVALID_SYMBOL",
+      });
+    }
+
+    if (!historyData.c || historyData.c.length === 0) {
+      console.error(`[ERROR] No history data for ${symbol}`);
+      return res.status(404).json({
+        success: false,
+        message: "Insufficient historical data for analysis",
+        error: "NO_HISTORY",
+      });
+    }
+
+    // Transform history
+    const history = historyData.t.map((timestamp, index) => ({
+      date: new Date(timestamp * 1000).toISOString().split("T")[0],
+      open: historyData.o ? historyData.o[index] : quote.c,
+      high: historyData.h ? historyData.h[index] : quote.c,
+      low: historyData.l ? historyData.l[index] : quote.c,
+      close: historyData.c[index],
+      volume: historyData.v ? historyData.v[index] : 0,
+    }));
+
+    const closes = history.map((h) => h.close);
+    const volumes = history.map((h) => h.volume);
+    const avgVolume = volumes.reduce((a, b) => a + b, 0) / volumes.length;
+
+    // Technical calculations
     const ma20 = calculateMA(closes, 20);
     const ma50 = calculateMA(closes, 50);
     const ma200 = calculateMA(closes, 200);
     const rsi = calculateRSI(closes, 14);
     const macd = calculateMACD(closes);
     const bb = calculateBollingerBands(closes, 20);
+
+    const currentPrice = quote.c;
+    const previousPrice =
+      history.length > 1 ? history[history.length - 2].close : currentPrice;
+    const currentVolume = historyData.v
+      ? historyData.v[historyData.v.length - 1]
+      : 0;
 
     const riskAnalysis = identifyRiskFactors(
       currentPrice,
@@ -452,14 +659,14 @@ router.get("/api/stock-analysis/:symbol", async (req, res) => {
 
     const patterns = identifyPatterns(closes);
 
-    res.json({
+    const responseData = {
       success: true,
       symbol: symbol.toUpperCase(),
       current: {
         price: currentPrice,
-        change: parseFloat(quote["09. change"]),
-        changePct: parseFloat(quote["10. change percent"]),
-        timestamp: quote["07. latest trading day"],
+        change: quote.d || 0,
+        changePct: quote.dp || 0,
+        timestamp: new Date(quote.t * 1000).toISOString(),
       },
       technicalIndicators: {
         ma20: ma20 ? ma20.toFixed(2) : null,
@@ -484,12 +691,31 @@ router.get("/api/stock-analysis/:symbol", async (req, res) => {
       riskAnalysis,
       patterns,
       history: history.slice(-30),
-    });
+    };
+
+    // Cache the response
+    setCache(cacheKey, responseData);
+
+    res.json(responseData);
   } catch (error) {
-    console.error("Stock Analysis Error:", error.message);
+    console.error(`[ERROR] Stock Analysis Error for ${req.params.symbol}:`, {
+      message: error.message,
+      code: error.code,
+      status: error.response?.status,
+      responseData: error.response?.data,
+      fullError: error.toJSON ? error.toJSON() : error,
+    });
+
+    let errorMessage = "Failed to analyze stock";
+    if (error.response?.status === 401) {
+      errorMessage = "API Key is invalid or expired.";
+    } else if (error.response?.status === 429) {
+      errorMessage = "Rate limit exceeded. Please wait.";
+    }
+
     res.status(500).json({
       success: false,
-      message: "Failed to analyze stock",
+      message: errorMessage,
       error: error.message,
     });
   }
